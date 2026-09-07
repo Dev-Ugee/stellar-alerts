@@ -18,6 +18,8 @@ const getSummarySchema = z.object({
 const getTaxExportSchema = z.object({
   walletId: z.string().optional(),
   format: z.enum(['cointracker', 'koinly', 'irs8949']).optional().default('cointracker'),
+const getCrossLedgerSchema = z.object({
+  walletId: z.string().optional(),
 });
 
 export class PaymentsController {
@@ -57,6 +59,8 @@ export class PaymentsController {
 
   async getTaxExport(request: FastifyRequest, reply: FastifyReply) {
     const parsed = getTaxExportSchema.safeParse(request.query);
+  async getCrossLedgerAnalytics(request: FastifyRequest, reply: FastifyReply) {
+    const parsed = getCrossLedgerSchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid query', details: parsed.error.format() });
     }
@@ -82,6 +86,11 @@ export class PaymentsController {
       .header('Content-Type', 'text/csv; charset=utf-8')
       .header('Content-Disposition', `attachment; filename="tax-export-${parsed.data.format}.csv"`)
       .send(csv);
+    const analytics = await paymentsService.getCrossLedgerAnalytics(
+      request.user.id,
+      parsed.data.walletId,
+    );
+    return reply.send({ success: true, analytics });
   }
 }
 
