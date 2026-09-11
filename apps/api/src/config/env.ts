@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
+  READ_REPLICA_URL: z.string().url().optional(),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   JWT_SECRET: z.string().min(1),
   REDIS_URL: z.string().url(),
@@ -9,6 +10,9 @@ const envSchema = z.object({
   REDIS_SENTINEL_MASTER_NAME: z.string().optional().default("mymaster"),
   REDIS_SENTINEL_PASSWORD: z.string().optional(),
   PORT: z.string().optional().default("3001"),
+  MASTER_ENCRYPTION_KEY: z.string().min(32).describe('Master key for encrypting webhook secrets (AES-256-GCM)'),
+  MASTER_ENCRYPTION_KEY_VERSION: z.string().optional().default("1"),
+  MASTER_ENCRYPTION_OLD_KEYS: z.string().optional().default("{}"),
   // Requests/minute allowed per client before @fastify/rate-limit responds 429.
   // Overridable so load-test runs (k6, etc.) can measure real server capacity
   // instead of hitting the rate limiter almost immediately.
