@@ -9,7 +9,6 @@ import {
   parseSorobanTransferEvent,
   routeEventToUsers,
 } from '../lib/soroban';
-import { registerSupervisorHeartbeat } from './supervisor';
 import { withWalletLock } from '../lib/lock';
 import { shouldAlert, PaymentContext } from '../lib/rules-engine';
 import { MemoryMonitor, MemorySnapshot } from '../utils/memory-monitor';
@@ -18,6 +17,21 @@ import { trace, SpanStatusCode, TraceFlags } from '@opentelemetry/api';
 const tracer = trace.getTracer('watcher-worker');
 
 
+let memoryMonitor: MemoryMonitor | null = null;
+
+const log = createLogger({ module: 'WatcherWorker' });
+
+/**
+ * Replies to the supervisor's IPC pings so the worker is not considered
+ * frozen and killed (see workers/supervisor.ts heartbeat logic).
+ */
+function registerSupervisorHeartbeat() {
+  process.on('message', (message: any) => {
+    if (message?.type === 'ping') {
+      process.send?.({ type: 'pong' });
+    }
+  });
+}
 
 export async function processPaymentRecord(
   wallet: { id: string; publicKey: string; userId?: string },
@@ -140,7 +154,7 @@ export async function processPaymentRecord(
 const CURSOR_PAGE_SIZE = 50;
 
 // Upper bound on pages walked in a single catch-up pass, so a long outage
-// cannot stall the poll loop indefinitely
+// cannot stall the catch-up run indefinitely
 const MAX_CATCHUP_PAGES = 20;
 
 export async function saveCursor(walletId: string, pagingToken: string) {
@@ -169,8 +183,9 @@ export async function ensureCursor(wallet: {
   const created = await prisma.ingestionCursor.create({
     data: { walletId: wallet.id, pagingToken },
   });
-  console.log(
-    `[WatcherWorker] 🔖 Seeded ingestion cursor for wallet ${wallet.publicKey.substring(0, 8)}... at ${pagingToken}`,
+  log.info(
+    { walletPublicKey: wallet.publicKey.substring(0, 8), pagingToken },
+    '🔖 Seeded ingestion cursor'
   );
   return created.pagingToken;
 }
@@ -476,5 +491,6 @@ async function processSorobanContractEvents(contractId: string) {
 
 if (require.main === module) {
   registerSupervisorHeartbeat();
+  startMemoryMonitor();
   runWatcher();
 }
