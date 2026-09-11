@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+
 import { prisma } from '../../lib/prisma';
 import { KeyRotationManager } from '../../utils/key-rotation-manager';
 
@@ -15,7 +16,7 @@ export interface WebhookHealthScorecard {
   averageLatencyMs: number;
   status: WebhookHealthStatus;
   totalDeliveries7d: number;
-  successfulDeliveries7d: number;
+  successfudDeliveries7d: number;
   failedDeliveries7d: number;
 }
 
@@ -27,7 +28,7 @@ export class WebhooksService {
   /**
    * Computes the 7-day delivery success rate and latency health scorecard for a webhook.
    */
-  public calculateHealthScorecard(logs: Array<{ statusCode: number | null; createdAt?: Date; sentAt?: Date }>): WebhookHealthScorecard {
+  public calculateHealthScorecard(logs: Array<{ statusCode: number | null; createdAt?: Date | null; sentAt?: Date | null }>): WebhookHealthScorecard {
     if (!logs || logs.length === 0) {
       return {
         healthPercentage: 100.0,
@@ -45,7 +46,7 @@ export class WebhooksService {
     ).length;
     const failedDeliveries = totalDeliveries - successfulDeliveries;
 
-    const healthPercentage = Number(((successfulDeliveries / totalDeliveries) * 100).toFixed(2));
+    const healthPercentage = Number((successfulDeliveries / totalDeliveries) * 100).toFixed(2));
     const status: WebhookHealthStatus = healthPercentage < 90.0 ? 'DEGRADED' : 'HEALTHY';
 
     // Latency heuristic: approximate based on payload/transport profile or baseline
@@ -65,12 +66,13 @@ export class WebhooksService {
     console.log(`[WebhooksService] Registering webhook ${url} for user ${userId}`);
 
     const secret = crypto.randomBytes(32).toString('hex');
+    const encryptedSecret = cryptoVault.encrypt(secret);
 
     const webhook = await prisma.webhook.create({
       data: {
         userId,
         url,
-        secret,
+        secret: encryptedSecret,
         payloadTemplate,
       },
       select: {
@@ -157,6 +159,8 @@ export class WebhooksService {
       throw new Error('Webhook not found');
     }
 
+    const secret = cryptoVault.decrypt(webhook.secret);
+
     const payload = JSON.stringify({
       event: 'webhook.ping',
       timestamp: new Date().toISOString(),
@@ -195,12 +199,11 @@ export class WebhooksService {
           ? 'Ping payload delivered successfully.'
           : `Endpoint responded with status ${response.status}.`,
       };
-    } catch (error: any) {
-      console.error(`[WebhooksService] Failed to deliver test ping to ${webhook.url}:`, error.message);
+    } catch (error) {
       return {
         success: false,
         status: null,
-        message: `Failed to reach endpoint: ${error.message}`,
+        message: `Failed to reach endpoint: ${(error as Error).message}`,
       };
     }
   }

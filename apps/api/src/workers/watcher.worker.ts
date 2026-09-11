@@ -9,7 +9,6 @@ import {
   parseSorobanTransferEvent,
   routeEventToUsers,
 } from '../lib/soroban';
-import { registerSupervisorHeartbeat } from './supervisor';
 import { withWalletLock } from '../lib/lock';
 import { shouldAlert, PaymentContext } from '../lib/rules-engine';
 import { MemoryMonitor, MemorySnapshot } from '../utils/memory-monitor';
@@ -18,32 +17,18 @@ import { nonceAuditManager } from '../utils/nonce-audit';
 
 let memoryMonitor: MemoryMonitor | null = null;
 
-/**
- * Stops the memory monitor and exits the process so WorkerSupervisor
- * respawns it cleanly. process.exit is deferred a turn via setImmediate so
- * the log line above it actually flushes before the process goes down.
- */
-export function gracefulRestart(reason: string, snapshot: MemorySnapshot): void {
-  console.error(
-    `[WatcherWorker] 🔁 Restarting worker: ${reason} (heap usage ${(snapshot.usageRatio * 100).toFixed(1)}%)`,
-  );
-  memoryMonitor?.stop();
-  setImmediate(() => {
-    process.exit(1);
-  });
-}
+const log = createLogger({ module: 'WatcherWorker' });
 
-export function startMemoryMonitor(): MemoryMonitor {
-  memoryMonitor = new MemoryMonitor({
-    onRestartRequired: (snapshot) => gracefulRestart('memory usage exceeded restart threshold', snapshot),
-    onCleanup: (snapshot, gcRan) => {
-      console.log(
-        `[WatcherWorker] 🧹 Ran memory cleanup pass at ${(snapshot.usageRatio * 100).toFixed(1)}% heap usage (gc ran: ${gcRan})`,
-      );
-    },
+/**
+ * Replies to the supervisor's IPC pings so the worker is not considered
+ * frozen and killed (see workers/supervisor.ts heartbeat logic).
+ */
+function registerSupervisorHeartbeat() {
+  process.on('message', (message: any) => {
+    if (message?.type === 'ping') {
+      process.send?.({ type: 'pong' });
+    }
   });
-  memoryMonitor.start();
-  return memoryMonitor;
 }
 
 export async function processPaymentRecord(
@@ -85,11 +70,14 @@ export async function processPaymentRecord(
   // Deduplicate check
   const existing = await prisma.payment.findUnique({ where: { txHash } });
   if (!existing) {
-    console.log(
-      `[WatcherWorker] 💰 New ${record.type} detected for wallet (${wallet.publicKey.substring(
-        0,
-        8,
-      )}...): ${amount} ${asset}`,
+    log.info(
+      {
+        walletPublicKey: wallet.publicKey.substring(0, 8),
+        amount,
+        asset,
+        type: record.type,
+      },
+      '💰 New payment detected'
     );
 
     const payment = await prisma.payment.create({
@@ -154,7 +142,7 @@ export async function processPaymentRecord(
 const CURSOR_PAGE_SIZE = 50;
 
 // Upper bound on pages walked in a single catch-up pass, so a long outage
-// cannot stall the poll loop indefinitely
+// cannot stall the catch-up run indefinitely
 const MAX_CATCHUP_PAGES = 20;
 
 export async function saveCursor(walletId: string, pagingToken: string) {
@@ -183,15 +171,16 @@ export async function ensureCursor(wallet: {
   const created = await prisma.ingestionCursor.create({
     data: { walletId: wallet.id, pagingToken },
   });
-  console.log(
-    `[WatcherWorker] 🔖 Seeded ingestion cursor for wallet ${wallet.publicKey.substring(0, 8)}... at ${pagingToken}`,
+  log.info(
+    { walletPublicKey: wallet.publicKey.substring(0, 8), pagingToken },
+    '🔖 Seeded ingestion cursor'
   );
   return created.pagingToken;
 }
 
 export async function processWalletPayments(wallet: { id: string; publicKey: string; userId?: string }) {
   if (!wallet.publicKey || !StellarSdk.StrKey.isValidEd25519PublicKey(wallet.publicKey)) {
-    console.warn(`[WatcherWorker] Skipping invalid public key checksum: "${wallet.publicKey}"`);
+    log.warn({ walletPublicKey: wallet.publicKey }, 'Skipping invalid public key checksum');
     return;
   }
 
@@ -215,14 +204,16 @@ export async function processWalletPayments(wallet: { id: string; publicKey: str
 
     if (records.length < CURSOR_PAGE_SIZE) return;
   }
-
   console.warn(
     `[WatcherWorker] Catch-up page limit reached for ${wallet.publicKey.substring(0, 8)}..., resuming next poll from ${cursor}`,
   );
 }
 
-export async function startHorizonSSEStream(wallet: { id: string; publicKey: string; userId?: string }) {
-  console.log(`[WatcherWorker] 📡 Opening Multi-Node Horizon SSE payment streams for wallet ${wallet.publicKey.substring(0, 8)}...`);
+export async function startHorizonSSEStream(wallet: { id: string; publicKey: string }) {
+  log.info(
+    { walletPublicKey: wallet.publicKey.substring(0, 8) },
+    '📡 Opening Horizon SSE payment stream'
+  );
 
   let timeoutId: NodeJS.Timeout;
   let closeStream: (() => void) | undefined;
@@ -240,26 +231,25 @@ export async function startHorizonSSEStream(wallet: { id: string; publicKey: str
     const cursor = await ensureCursor(wallet);
     resetHeartbeat();
 
-    closeStream = stellar.multiNode.streamPaymentsMultiNode(
-      wallet.publicKey,
-      cursor,
-      async (record: any, nodeUrl: string) => {
-        resetHeartbeat();
-        console.log(
-          `[WatcherStream] ⚡ Live SSE stream message received from ${nodeUrl}: ${record.type}`,
-        );
-        await processPaymentRecord(wallet, record);
-        if (record.paging_token) {
-          await saveCursor(wallet.id, record.paging_token);
-        }
-      },
-      (error: any, nodeUrl: string) => {
-        console.warn(
-          `[WatcherStream] SSE stream error on node ${nodeUrl} for ${wallet.publicKey.substring(0, 8)}...:`,
-          error?.message || error,
-        );
-      }
-    );
+    closeStream = stellar.server
+      .payments()
+      .forAccount(wallet.publicKey)
+      .cursor(cursor)
+      .stream({
+        onmessage: async (record: any) => {
+          log.info({ type: record.type }, '⚡ Live SSE stream message received');
+          await processPaymentRecord(wallet, record);
+          if (record.paging_token) {
+            await saveCursor(wallet.id, record.paging_token);
+          }
+        },
+        onerror: (error: any) => {
+          log.error(
+            { walletPublicKey: wallet.publicKey.substring(0, 8), err: error },
+            'SSE stream error'
+          );
+        },
+      }) as unknown as () => void; // cast to avoid typings issues since stellar-sdk types might vary
 
     const originalClose = closeStream;
     closeStream = () => {
@@ -269,10 +259,77 @@ export async function startHorizonSSEStream(wallet: { id: string; publicKey: str
 
     return closeStream;
   } catch (err: any) {
-    console.error(`[WatcherStream] Failed to open multi-node SSE stream: ${err.message}`);
-    clearTimeout(timeoutId!);
+    log.error({ err: err.message }, 'Failed to open SSE stream');
     return null;
   }
+
+export async function runWatcher() {
+  log.info('🚀 Starting Stellar Testnet Watcher Worker...');
+
+  const poll = async () => {
+    try {
+      const wallets = await prisma.wallet.findMany();
+      if (wallets.length === 0) {
+        log.info('No wallets registered in DB to watch. Waiting for next poll...');
+        return;
+      }
+
+      log.info({ walletCount: wallets.length }, 'Checking registered wallets');
+      for (const wallet of wallets) {
+        await processWalletPayments({ id: wallet.id, publicKey: wallet.publicKey, userId: wallet.userId });
+      }
+
+  const open = () => {
+    if (closedByCaller) return;
+    attempts += 1;
+
+    closeCurrent = connector(lastCursor, {
+      onmessage: async (record: any) => {
+        await handleStreamRecord(wallet, record);
+        if (record.paging_token) {
+          lastCursor = record.paging_token;
+        }
+      },
+      onerror: (error: any) => {
+        console.error(
+          `[WatcherStream] ⚠️ SSE stream error for ${wallet.publicKey.substring(0, 8)}...:`,
+          error?.message ?? error
+        );
+        // Tear down the (possibly half-open) connection before reconnecting so
+        // we never end up with two overlapping streams.
+        if (closeCurrent) {
+          try {
+            closeCurrent();
+          } catch {
+            /* ignore */
+          }
+          closeCurrent = null;
+        }
+        scheduleReconnect();
+      },
+    });
+  };
+
+  const close = () => {
+    closedByCaller = true;
+    clearReconnectTimer();
+    if (closeCurrent) {
+      try {
+        closeCurrent();
+      } catch {
+        /* ignore */
+      }
+    } catch (error) {
+      log.error({ err: error }, 'Polling error');
+    }
+  };
+
+  console.log(
+    `[WatcherWorker] 📡 Opening Horizon SSE payment stream for wallet ${wallet.publicKey.substring(0, 8)}... (cursor ${lastCursor})`
+  );
+  open();
+
+  return close;
 }
 
 /**
