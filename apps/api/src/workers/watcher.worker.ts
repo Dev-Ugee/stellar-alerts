@@ -2,10 +2,34 @@ import * as StellarSdk from 'stellar-sdk';
 import { prisma, connectWithRetry } from '../lib/prisma';
 import { stellar, decodeHorizonAsset, parseSacTransferEvent } from '../lib/stellar';
 import { enqueuePaymentAlert } from '../lib/queue';
-import { getSorobanLatestLedger } from '../lib/soroban';
-import { createLogger } from '../lib/logger';
+import {
+  getSorobanLatestLedger,
+  loadContractRegistry,
+  getActiveContractIds,
+  parseSorobanTransferEvent,
+  routeEventToUsers,
+} from '../lib/soroban';
+import { withWalletLock } from '../lib/lock';
+import { shouldAlert, PaymentContext } from '../lib/rules-engine';
+import { MemoryMonitor, MemorySnapshot } from '../utils/memory-monitor';
+import { nonceAuditManager } from '../utils/nonce-audit';
+
+
+let memoryMonitor: MemoryMonitor | null = null;
 
 const log = createLogger({ module: 'WatcherWorker' });
+
+/**
+ * Replies to the supervisor's IPC pings so the worker is not considered
+ * frozen and killed (see workers/supervisor.ts heartbeat logic).
+ */
+function registerSupervisorHeartbeat() {
+  process.on('message', (message: any) => {
+    if (message?.type === 'ping') {
+      process.send?.({ type: 'pong' });
+    }
+  });
+}
 
 export async function processPaymentRecord(
   wallet: { id: string; publicKey: string; userId?: string },
@@ -178,9 +202,10 @@ export async function processWalletPayments(wallet: { id: string; publicKey: str
       }
     }
 
-  log.warn(
-    { walletPublicKey: wallet.publicKey.substring(0, 8), cursor },
-    'Catch-up page limit reached, resuming next poll from cursor'
+    if (records.length < CURSOR_PAGE_SIZE) return;
+  }
+  console.warn(
+    `[WatcherWorker] Catch-up page limit reached for ${wallet.publicKey.substring(0, 8)}..., resuming next poll from ${cursor}`,
   );
 }
 

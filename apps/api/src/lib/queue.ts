@@ -473,7 +473,6 @@ export async function failedJobHandler({ jobId, failedReason }: { jobId?: string
     console.warn(`[Queue] Failed to process DLQ routing for ${jobId}: ${err.message}`);
   }
 }
-
 export async function enqueuePaymentAlert(data: AlertJobData) {
   if (!alertQueue) {
     queueLog.info({ txHash: data.txHash }, 'Skipping queue enqueue (Queue not connected)');
