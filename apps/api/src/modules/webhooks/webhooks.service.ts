@@ -1,9 +1,7 @@
 import crypto from 'crypto';
 
 import { prisma } from '../../lib/prisma';
-import { generateWebhookSignature } from '../../utils/webhook-signer';
-import { cryptoVault } from '../../utils/crypto-vault';
-import { validateHandlebarsTemplate } from '../../utils/payload-template';
+import { KeyRotationManager } from '../../utils/key-rotation-manager';
 
 export interface WebhookTestResult {
   success: boolean;
@@ -25,6 +23,8 @@ export interface WebhookHealthScorecard {
 const WEBHOOK_TEST_TIMEOUT_MS = 10_000;
 
 export class WebhooksService {
+  private keyRotationManager = new KeyRotationManager();
+
   /**
    * Computes the 7-day delivery success rate and latency health scorecard for a webhook.
    */
@@ -63,12 +63,7 @@ export class WebhooksService {
   }
 
   async addWebhook(userId: string, url: string, payloadTemplate?: string) {
-    if (payloadTemplate) {
-      const validation = validateHandlebarsTemplate(payloadTemplate);
-      if (!validation.ok) {
-        throw new Error(`Invalid payload template: ${validation.error}`);
-      }
-    }
+    console.log(`[WebhooksService] Registering webhook ${url} for user ${userId}`);
 
     const secret = crypto.randomBytes(32).toString('hex');
     const encryptedSecret = cryptoVault.encrypt(secret);
@@ -88,6 +83,8 @@ export class WebhooksService {
         createdAt: true,
       },
     });
+
+    this.keyRotationManager.setKeyState(webhook.id, { activeSecret: secret });
 
     return {
       ...webhook,
@@ -173,16 +170,24 @@ export class WebhooksService {
       },
     });
 
-    const signature = await generateWebhookSignature(payload, { secret: webhook.secret });
+    if (!this.keyRotationManager.getKeyState(webhook.id)) {
+      this.keyRotationManager.setKeyState(webhook.id, { activeSecret: webhook.secret });
+    }
+    const signatures = this.keyRotationManager.sign(payload, webhook.id);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Stellar-Signature': signatures.primary.headerValue,
+      'X-Stellar-Alerts-Nonce': signatures.primary.nonce,
+    };
+    if (signatures.secondary) {
+      headers['X-Stellar-Signature-Secondary'] = signatures.secondary.headerValue;
+    }
 
     try {
       const response = await fetch(webhook.url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Stellar-Signature': signature.headerValue,
-          'X-Stellar-Alerts-Nonce': signature.nonce,
-        },
+        headers,
         body: payload,
         signal: AbortSignal.timeout(WEBHOOK_TEST_TIMEOUT_MS),
       });
