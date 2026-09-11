@@ -12,6 +12,18 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: stellar_alerts
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
       redis:
         image: redis:7-alpine
         ports:
@@ -45,8 +57,15 @@ jobs:
       - name: Typecheck Frontend (apps/web)
         run: npx tsc -p apps/web/tsconfig.json --noEmit
 
+      - name: Push Prisma Schema (test database)
+        run: npm run db:push
+        env:
+          DATABASE_URL: "postgresql://user:password@localhost:5432/stellar_alerts?schema=public"
+
       - name: Run API Unit Tests
         run: npm run test:api
+        env:
+          DATABASE_URL: "postgresql://user:password@localhost:5432/stellar_alerts?schema=public"
 
       - name: Run Web Lint
         run: npm run lint --workspace=web
@@ -77,7 +96,7 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      # docker-compose.yml runs toxiproxy with network_mode: host, which is
+      # docker-compose.yml runs toxproxy with network_mode: host, which is
       # Linux-only — exactly what ubuntu-latest runners are, so this needs
       # no extra host-gateway wiring (the chaos suite's own fixture server
       # binds to 127.0.0.1, directly reachable from the toxiproxy container).
@@ -101,7 +120,7 @@ jobs:
         working-directory: apps/api
         run: npx --no-install vitest run src/__tests__/chaos.test.ts
         env:
-          TOXIPROXY_URL: http://localhost:8474
+          VOXIPROTY_URL: http://localhost:8474
 
       - name: Stop Toxiproxy
         if: always()
