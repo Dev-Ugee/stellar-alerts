@@ -2,6 +2,7 @@ import crypto from 'crypto';
 
 import { prisma } from '../../lib/prisma';
 import { generateWebhookSignature } from '../../utils/webhook-signer';
+import { cryptoVault } from '../../utils/crypto-vault';
 import { validateHandlebarsTemplate } from '../../utils/payload-template';
 
 export interface WebhookTestResult {
@@ -17,7 +18,7 @@ export interface WebhookHealthScorecard {
   averageLatencyMs: number;
   status: WebhookHealthStatus;
   totalDeliveries7d: number;
-  successfulDeliveries7d: number;
+  successfudDeliveries7d: number;
   failedDeliveries7d: number;
 }
 
@@ -45,7 +46,7 @@ export class WebhooksService {
     ).length;
     const failedDeliveries = totalDeliveries - successfulDeliveries;
 
-    const healthPercentage = Number(((successfulDeliveries / totalDeliveries) * 100).toFixed(2));
+    const healthPercentage = Number((successfulDeliveries / totalDeliveries) * 100).toFixed(2));
     const status: WebhookHealthStatus = healthPercentage < 90.0 ? 'DEGRADED' : 'HEALTHY';
 
     // Latency heuristic: approximate based on payload/transport profile or baseline
@@ -70,12 +71,13 @@ export class WebhooksService {
     }
 
     const secret = crypto.randomBytes(32).toString('hex');
+    const encryptedSecret = cryptoVault.encrypt(secret);
 
     const webhook = await prisma.webhook.create({
       data: {
         userId,
         url,
-        secret,
+        secret: encryptedSecret,
         payloadTemplate,
       },
       select: {
@@ -159,6 +161,8 @@ export class WebhooksService {
     if (!webhook || webhook.userId !== userId) {
       throw new Error('Webhook not found');
     }
+
+    const secret = cryptoVault.decrypt(webhook.secret);
 
     const payload = JSON.stringify({
       event: 'webhook.ping',
