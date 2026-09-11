@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
+  READ_REPLICA_URL: z.string().url().optional(),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   JWT_SECRET: z.string().min(1),
   REDIS_URL: z.string().url(),
@@ -9,6 +10,9 @@ const envSchema = z.object({
   REDIS_SENTINEL_MASTER_NAME: z.string().optional().default("mymaster"),
   REDIS_SENTINEL_PASSWORD: z.string().optional(),
   PORT: z.string().optional().default("3001"),
+  MASTER_ENCRYPTION_KEY: z.string().min(32).describe('Master key for encrypting webhook secrets (AES-256-GCM)'),
+  MASTER_ENCRYPTION_KEY_VERSION: z.string().optional().default("1"),
+  MASTER_ENCRYPTION_OLD_KEYS: z.string().optional().default("{}"),
   // Requests/minute allowed per client before @fastify/rate-limit responds 429.
   // Overridable so load-test runs (k6, etc.) can measure real server capacity
   // instead of hitting the rate limiter almost immediately.
@@ -19,9 +23,11 @@ const envSchema = z.object({
   SOROBAN_RENT_RENEWAL_THRESHOLD: z.string().optional().default("5000"),
   SOROBAN_RENT_TARGET_TTL: z.string().optional().default("10000"),
   SOROBAN_RENT_MAX_CONCURRENCY: z.string().optional().default("5"),
+  SOROBAN_STAKING_REWARD_WORKER_ENABLED: z.string().optional().default("true"),
 });
+export type Env = z.infer<typeof envSchema>;
 
-const parseEnv = () => {
+const parseEnv = (): Env => {
   const envInput = {
     ...process.env,
     DATABASE_URL: process.env.DATABASE_URL || (process.env.NODE_ENV === 'test' || process.env.VITEST ? "postgresql://postgres:postgres@localhost:5432/stellar_alerts" : undefined),
@@ -37,15 +43,13 @@ const parseEnv = () => {
     SOROBAN_RENT_RENEWAL_THRESHOLD: process.env.SOROBAN_RENT_RENEWAL_THRESHOLD || "5000",
     SOROBAN_RENT_TARGET_TTL: process.env.SOROBAN_RENT_TARGET_TTL || "10000",
     SOROBAN_RENT_MAX_CONCURRENCY: process.env.SOROBAN_RENT_MAX_CONCURRENCY || "5",
+    SOROBAN_STAKING_REWARD_WORKER_ENABLED: process.env.SOROBAN_STAKING_REWARD_WORKER_ENABLED || "true",
   };
-
   const parsed = envSchema.safeParse(envInput);
 
   if (!parsed.success) {
-    console.error("❌ Invalid environment variables:", parsed.error.format());
-    if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
-      process.exit(1);
-    }
+    console.error("✍ Invalid environment variables:", parsed.error.format());
+    process.exit(1);
   }
 
   return parsed.data || {
@@ -64,6 +68,7 @@ const parseEnv = () => {
     SOROBAN_RENT_RENEWAL_THRESHOLD: "5000",
     SOROBAN_RENT_TARGET_TTL: "10000",
     SOROBAN_RENT_MAX_CONCURRENCY: "5",
+    SOROBAN_STAKING_REWARD_WORKER_ENABLED: "true",
   };
 };
 
