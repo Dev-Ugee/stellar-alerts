@@ -67,7 +67,11 @@ export const ModelName = {
   PendingMultisigTransaction: 'PendingMultisigTransaction',
   AnchorTransactionWatch: 'AnchorTransactionWatch',
   DexSwapWatch: 'DexSwapWatch',
-  DexSwapEvent: 'DexSwapEvent'
+  DexSwapWatch: 'DexSwapWatch',
+  SorobanTopicIndex: 'SorobanTopicIndex',
+  SorobanTopicIndexCursor: 'SorobanTopicIndexCursor',
+  DexSwapEvent: 'DexSwapEvent',
+  SecurityAuditLog: 'SecurityAuditLog'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -153,6 +157,7 @@ export const WebhookScalarFieldEnum = {
   userId: 'userId',
   url: 'url',
   secret: 'secret',
+  payloadTemplate: 'payloadTemplate',
   isActive: 'isActive',
   createdAt: 'createdAt'
 } as const
@@ -297,6 +302,33 @@ export const DexSwapWatchScalarFieldEnum = {
 export type DexSwapWatchScalarFieldEnum = (typeof DexSwapWatchScalarFieldEnum)[keyof typeof DexSwapWatchScalarFieldEnum]
 
 
+export const SorobanTopicIndexScalarFieldEnum = {
+  id: 'id',
+  contractId: 'contractId',
+  ledgerSeq: 'ledgerSeq',
+  txHash: 'txHash',
+  topicXdrJson: 'topicXdrJson',
+  topics: 'topics',
+  topicSymbols: 'topicSymbols',
+  topicSymbol: 'topicSymbol',
+  topicsHash: 'topicsHash',
+  createdAt: 'createdAt'
+} as const
+
+export type SorobanTopicIndexScalarFieldEnum = (typeof SorobanTopicIndexScalarFieldEnum)[keyof typeof SorobanTopicIndexScalarFieldEnum]
+
+
+export const SorobanTopicIndexCursorScalarFieldEnum = {
+  id: 'id',
+  contractId: 'contractId',
+  ledgerSeq: 'ledgerSeq',
+  updatedAt: 'updatedAt',
+  createdAt: 'createdAt'
+} as const
+
+export type SorobanTopicIndexCursorScalarFieldEnum = (typeof SorobanTopicIndexCursorScalarFieldEnum)[keyof typeof SorobanTopicIndexCursorScalarFieldEnum]
+
+
 export const DexSwapEventScalarFieldEnum = {
   id: 'id',
   poolContractId: 'poolContractId',
@@ -311,6 +343,21 @@ export const DexSwapEventScalarFieldEnum = {
 } as const
 
 export type DexSwapEventScalarFieldEnum = (typeof DexSwapEventScalarFieldEnum)[keyof typeof DexSwapEventScalarFieldEnum]
+
+
+export const SecurityAuditLogScalarFieldEnum = {
+  id: 'id',
+  eventType: 'eventType',
+  txHash: 'txHash',
+  topic: 'topic',
+  sequence: 'sequence',
+  contractId: 'contractId',
+  details: 'details',
+  severity: 'severity',
+  createdAt: 'createdAt'
+} as const
+
+export type SecurityAuditLogScalarFieldEnum = (typeof SecurityAuditLogScalarFieldEnum)[keyof typeof SecurityAuditLogScalarFieldEnum]
 
 
 export const SortOrder = {

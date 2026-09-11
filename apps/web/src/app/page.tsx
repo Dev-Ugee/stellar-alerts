@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import NetworkVisualizer3D from '@/components/dashboard/NetworkVisualizer3D';
+import AuditWorkspace from '@/components/dashboard/AuditWorkspace';
 import { signOut, useSession } from 'next-auth/react';
 import { WalletDTO, PaymentDTO } from '@stellar-alerts/shared';
 import { WatcherForm } from '@/components/WatcherForm';
@@ -12,11 +14,14 @@ import {
   WalletList,
   PaymentTable,
   NotificationModal,
+  ActivityHeatmap,
+  EmailTemplatePreview,
 } from '@/components/dashboard';
-import { CommandPalette } from '@/components/CommandPalette';
+import { useBatchReader } from '@/lib/hooks/useBatchReader';
 
 export default function Home() {
   const { data: session } = useSession();
+  const batchReader = useBatchReader(); // NEW: Batched read layer
   const [emailInput, setEmailInput] = useState('');
   const [sentEmail, setSentEmail] = useState('');
   const [devMagicUrl, setDevMagicUrl] = useState<string | null>(null);
@@ -35,78 +40,111 @@ export default function Home() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
   const [totalVolumeXLM, setTotalVolumeXLM] = useState<number>(0);
   const [totalPaymentsCount, setTotalPaymentsCount] = useState<number>(0);
+  const [crossLedgerAnalytics, setCrossLedgerAnalytics] = useState<any>(null);
 
-  // Helper to get auth headers
+  // Helper to get auth headers (kept for non-batched endpoints like auth)
   const getHeaders = useCallback(() => {
     const headers: Record<string, string> = {};
-    if (session && (session as any).accessToken) {
-      headers['Authorization'] = `Bearer ${(session as any).accessToken}`;
+    const accessToken = (session as (typeof session & AppSession) | null)?.accessToken;
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
     }
     return headers;
   }, [session]);
 
-  // Fetch wallets
-  const fetchWallets = useCallback(async () => {
-    if (!session) return;
-    try {
-      const res = await fetch('http://localhost:3001/wallets', { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.wallets)) {
-          setWallets(data.wallets);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch wallets:', err);
-    }
-  }, [session, getHeaders]);
-
-  // Fetch payments
-  const fetchPayments = useCallback(async () => {
+  /**
+   * NEW BATCHED APPROACH:
+   * Single fetch that groups wallets + payments + summary into one cached call.
+   * 
+   * OLD APPROACH (commented out below):
+   * - fetchWallets() → 1 RPC call
+   * - fetchPayments() → 1 RPC call  
+   * - fetchSummary() → 1 RPC call
+   * = 3 separate round-trips, no caching
+   */
+  const fetchDashboardData = useCallback(async () => {
     if (!session) return;
     setIsLoadingPayments(true);
     try {
-      const url = selectedWalletId
-        ? `http://localhost:3001/payments?walletId=${encodeURIComponent(selectedWalletId)}`
-        : 'http://localhost:3001/payments';
-      const res = await fetch(url, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.payments)) {
-          setPayments(data.payments);
-        }
-      }
+      const data = await batchReader.fetchUserPortfolioBatched(
+        selectedWalletId || undefined
+      );
+      
+      setWallets(data.wallets);
+      setPayments(data.payments);
+      setTotalVolumeXLM(data.summary.totalVolumeXLM);
+      setTotalPaymentsCount(data.summary.totalPayments);
     } catch (err) {
-      console.error('Failed to fetch payments:', err);
+      console.error('Failed to fetch dashboard data:', err);
     } finally {
       setIsLoadingPayments(false);
     }
-  }, [session, selectedWalletId, getHeaders]);
+  }, [session, selectedWalletId, batchReader]);
 
-  // Fetch summary stats
-  const fetchSummary = useCallback(async () => {
-    if (!session) return;
-    try {
-      const res = await fetch('http://localhost:3001/payments/summary', { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.summary) {
-          setTotalVolumeXLM(Number(data.summary.totalVolumeXLM || 0));
-          setTotalPaymentsCount(Number(data.summary.totalPayments || 0));
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch summary:', err);
-    }
-  }, [session, getHeaders]);
+  // OLD APPROACH (kept as reference):
+  // const fetchWallets = useCallback(async () => {
+  //   if (!session) return;
+  //   try {
+  //     const res = await fetch('http://localhost:3001/wallets', { headers: getHeaders() });
+  //     if (res.ok) {
+  //       const data = await res.json();
+  //       if (data.success && Array.isArray(data.wallets)) {
+  //         setWallets(data.wallets);
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to fetch wallets:', err);
+  //   }
+  // }, [session, getHeaders]);
+
+  // const fetchPayments = useCallback(async () => {
+  //   if (!session) return;
+  //   setIsLoadingPayments(true);
+  //   try {
+  //     const url = selectedWalletId
+  //       ? `http://localhost:3001/payments?walletId=${encodeURIComponent(selectedWalletId)}`
+  //       : 'http://localhost:3001/payments';
+  //     const res = await fetch(url, { headers: getHeaders() });
+  //     if (res.ok) {
+  //       const data = await res.json();
+  //       if (data.success && Array.isArray(data.payments)) {
+  //         setPayments(data.payments);
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to fetch payments:', err);
+  //   } finally {
+  //     setIsLoadingPayments(false);
+  //   }
+  // }, [session, selectedWalletId, getHeaders]);
+
+  // const fetchSummary = useCallback(async () => {
+  //   if (!session) return;
+  //   try {
+  //     const res = await fetch('http://localhost:3001/payments/summary', { headers: getHeaders() });
+  //     if (res.ok) {
+  //       const data = await res.json();
+  //       if (data.success && data.summary) {
+  //         setTotalVolumeXLM(Number(data.summary.totalVolumeXLM || 0));
+  //         setTotalPaymentsCount(Number(data.summary.totalPayments || 0));
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to fetch summary:', err);
+  //   }
+  // }, [session, getHeaders]);
 
   useEffect(() => {
     if (session) {
-      fetchWallets();
-      fetchPayments();
-      fetchSummary();
+      // NEW: Single batched call instead of 3 separate calls
+      fetchDashboardData();
+      
+      // OLD: 3 separate unbatched calls
+      // fetchWallets();
+      // fetchPayments();
+      // fetchSummary();
     }
-  }, [session, selectedWalletId, fetchWallets, fetchPayments, fetchSummary]);
+  }, [session, selectedWalletId, fetchDashboardData]);
 
   const handleRemoveWallet = async (id: string) => {
     try {
@@ -118,12 +156,28 @@ export default function Home() {
         if (selectedWalletId === id) {
           setSelectedWalletId(null);
         }
-        fetchWallets();
-        fetchPayments();
-        fetchSummary();
+        // NEW: Invalidate cache after mutation
+        batchReader.invalidateAll();
+        // Then refetch with batched call
+        fetchDashboardData();
       }
     } catch (err) {
       console.error('Failed to remove wallet:', err);
+    }
+  };
+
+  const handleSaveEmailTemplate = async (template: EmailTemplateConfig) => {
+    try {
+      await fetch('http://localhost:3001/notifications/preferences', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getHeaders(),
+        },
+        body: JSON.stringify({ emailTemplate: template }),
+      });
+    } catch (err) {
+      console.error('Failed to save email template preferences:', err);
     }
   };
 
@@ -293,6 +347,7 @@ export default function Home() {
                     totalPaymentsCount={totalPaymentsCount || payments.length}
                     totalVolumeXLM={totalVolumeXLM}
                     activeWalletsCount={wallets.length}
+                    crossLedgerAnalytics={crossLedgerAnalytics}
                   />
                 ),
               },
@@ -305,6 +360,16 @@ export default function Home() {
                     totalVolumeXLM={totalVolumeXLM}
                   />
                 ),
+              },
+              {
+                id: 'activity-heatmap',
+                label: 'Activity Heatmap',
+                content: <ActivityHeatmap payments={payments} />,
+              },
+              {
+                id: 'email-template-preview',
+                label: 'Email Receipt Template',
+                content: <EmailTemplatePreview onSaveTemplate={handleSaveEmailTemplate} />,
               },
               {
                 id: 'webhook-sandbox',
@@ -344,8 +409,42 @@ export default function Home() {
                   </div>
                 ),
               },
+              {
+                id: 'network-visualizer',
+                label: 'Live Payment Stream Network',
+                content: <NetworkVisualizer3D payments={payments} />,
+              },
+              {
+                id: 'audit-workspace',
+                label: 'Collaborative Audit Workspace',
+                content: (
+                  <AuditWorkspace
+                    payments={payments}
+                    currentUser={{
+                      id: (session.user as { id?: string } | undefined)?.id || session.user?.email || 'anonymous',
+                      name: session.user?.name || session.user?.email || 'Auditor',
+                    }}
+                  />
+                ),
+              },
             ]}
           />
+
+          <div id="add-wallet-section" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Watcher Form Card */}
+            <div className="lg:col-span-4 bg-[#0c0c14]/80 backdrop-blur-md rounded-3xl border border-white/10 p-7 shadow-2xl hover:border-cyan-500/30 transition-all duration-500">
+              <WatcherForm onWalletAdded={() => { 
+                // NEW: Invalidate cache and refetch with batched call
+                batchReader.invalidateAll();
+                fetchDashboardData(); 
+              }} />
+            </div>
+
+            {/* Modular Component 3: PaymentTable */}
+            <div className="lg:col-span-8">
+              <PaymentTable payments={payments} isLoading={isLoadingPayments} />
+            </div>
+          </div>
         </main>
 
         {/* Modular Component 4: NotificationModal */}
